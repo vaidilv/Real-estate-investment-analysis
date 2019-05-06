@@ -1,0 +1,1016 @@
+---
+title: "Analysis of Short term Rentals in NYC"
+author: "Vaidiyanathan Lalgudi Venkatesan"
+date: "March 22, 2019"
+output:
+  html_document: 
+    runtime: shiny
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+
+# {.tabset .tabset-fade .tabset-pills}
+```{r include = FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+list.of.packages <- c("ggplot2", "knitr", "shiny", "reshape", "tidyverse", "dplyr", "tidyr","plotly","ggthemes","DT", "scales", "kableExtra")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if (length(new.packages)) install.packages(new.packages,repos = "http://cran.us.r-project.org")
+
+### Libraries ###
+# For plotting graphs
+library(ggplot2)
+# The knitr package is used for dynamic report generation
+library(knitr)
+# Interactive tool
+library(shiny)
+#Reshape to flexibly restructure and aggregate data
+library(reshape)
+#tidyverse is a collection of various packages as described below:
+#dplyr: to manipulate and join data
+#ggplot2: to visualize data
+#tidyr: to tidy data
+#stringr: string manipulation
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+#add-on to ggplot for making plots
+library(plotly)
+#Extra themes for plots
+library(ggthemes)
+#Plot interactive tables
+library(DT)
+# Scale labels in ggplot
+library(scales)
+# For tables
+library(kableExtra)
+```
+
+## Business Case
+
+### Problem definition 
+
+#### Current state
+
+* We are consulting for a real estate company that has a niche in purchasing
+properties to rent out short-term, specifically within New York City
+* As a part of their internal analysis, the client has identified that two-bedroom properties are the best to invest for maximizing returns
+* Our Business problem is to Build a data product and identify zip codes which would generate the most profit on short term rentals within New York City
+
+#### Future state (Desired)
+
+* The client has clear ideas as to which zip codes are most profitable zip codes
+and neighborhoods with higher returns. 
+
+### Data and Key assumptions
+
+* **Cost data**: Zillow provides us an estimate of value for two-bedroom 
+properties
+* **Revenue data**: AirBnB is the medium through which the investor plans to 
+lease out their investment property. We are able to see how much properties in certain
+neighborhoods rent out for in New York City
+* The investor will pay for the property in cash (i.e. no mortgage/interest rate will need to be accounted for)
+* The time value of money discount rate is 0% (i.e. $1 today is worth the same 100 years from now)
+* All properties and all square feet within each locale is assumed to be homogeneous (i.e. a 1000 square foot property in a locale such as Brooklyn or Manhattan generates twice the revenue and costs twice as much as any other 500 square foot property within that same locale)
+
+## Methodology
+
+The following steps will be taken to complete the analysis
+
+* **Data cleaning**: The given data will be read and cleaned: 
+Perform univariate analysis, handle missing values, identify anomalies that can
+negatively influence our decision making.
+
+* **Data Preparation**: Combining the datasets, identify outliers and **creating metrics** for profitability
+
+* **Analysis**: Visualize the cleaned data and generate insights from it
+
+* **Custom Property Finder (Shiny)**: A shiny app that helps the client decide
+the future course of action based on the company goals
+
+* **Future work**: The possible Future work including steps that could not be
+completed in the stipulated time-frame and the data that can make this analysis
+robust
+
+
+## Data Cleaning {.tabset .tabset-fade .tabset-pills}
+
+We have 2 datasets,
+
+1. Cost data from Zillow
+
+2. Revenue data from AirBnB
+
+These datasets are read, analysed and cleaned accordingly to extract information
+required for our analysis. The steps carried out in data cleaning process of
+Zillow and AirBnB datasets are shown in the below tabs
+
+### AirBnB
+
+#### Load Data
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+# Airbnb dataset
+# Downloading from the link
+airbnb_link <- "http://data.insideairbnb.com/united-states/ny/new-york-city/2017-05-02/data/listings.csv.gz"
+download_file <- tempfile()
+download.file(airbnb_link,download_file)
+
+# Reading the csv file
+airbnb <- read.csv(gzfile(download_file), header = TRUE, stringsAsFactors = FALSE)
+
+# Removing the link and temp file
+rm(download_file)
+rm(airbnb_link)
+
+# Number of zip codes with length not equal to 5.
+nchar_zips <- apply(data.frame(airbnb[,"zipcode"]), 1, function(x) nchar(x))
+abnormal_zips <- which(nchar_zips != 5)
+
+```
+
+* The AirBnB data has information about **`r nrow(airbnb)` properties with `r ncol(airbnb)` variables**
+* We observe that **`r length(abnormal_zips)` zip codes are not 5 characters length**
+(1111 instead of 01111). We need to clean this prior to joining. Here, we remove
+those zip codes, since we do not have a certain way to impute the same
+* There are **`r length(unique(airbnb$country))` countries** labelled in the dataset, US and Uruguay, with only one property labelled as New york, Uruguay. This is assumed as a data logging error
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Removing zip codes with abnormal character length
+airbnb <- airbnb[-abnormal_zips,]
+
+# Filtering only 2bkh properties
+airbnb_2bhk <- airbnb %>% filter(bedrooms == 2)
+
+# Percentage of 2bhk properties in Airbnb dataset
+ratio_2bhk <- round(nrow(airbnb_2bhk)/nrow(airbnb)*100)
+
+```
+
+* Only **`r ratio_2bhk`% of the properties listed were 2BHK**. We filter only those for our further analysis
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+# Zero missing values in Price variable
+missing_price <- sum(is.na(airbnb_2bhk$price))
+
+# Converting price to number
+airbnb_2bhk$price <- as.double(gsub("[\\$,]", "", airbnb_2bhk$price))
+
+# Review score and number of amenities
+airbnb_2bhk$review_scores_rating <- as.numeric(airbnb_2bhk$review_scores_rating)
+airbnb_2bhk$no_amenities <- str_count(airbnb_2bhk$amenities, ",") + 1
+
+# Missing ratio of square footage
+missing_sqft <- round(sum(is.na(airbnb_2bhk$square_feet))/nrow(airbnb_2bhk)*100)
+
+```
+
+* There are **no missing values in price**, but it is a character variable. Hence,
+this is converted to numbers
+
+* We understand that **Square footage** is an important variable. But it **has about `r missing_sqft` missing values**. Hence we do not use that. 
+
+* Also, the variables **weekly price and monthly price have a lot of missing values**
+and hence cannot be used.
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Selecting important variables
+airbnb_final <- airbnb_2bhk %>% 
+                      select(id, neighbourhood_group_cleansed,
+                          zipcode, price, no_amenities, review_scores_rating)
+
+# Renaming the neighborhood variable
+names(airbnb_final)[names(airbnb_final) == 'neighbourhood_group_cleansed'] <- 'Neighborhood'
+
+```
+
+* **Most of the variables are strings** which will not be helpful in
+our analysis as they dont give any explicit information which can be used to 
+generate insights. Hence we select the varaibles which are likely to
+impact the revenue and cost of each property.
+
+
+### Zillow
+
+#### Load data
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+# Loading the Zillow dataset
+zillow <- read.csv(unz("Zip_Zhvi_2bedroom.csv.zip", "Zip_Zhvi_2bedroom.csv"),
+                   header = TRUE, stringsAsFactors = FALSE)
+# Number of zip codes with length not equal to 5.
+nchar_zips <- apply(data.frame(zillow[,"RegionName"]), 1, function(x) nchar(x))
+
+abnormal_zips <- which(nchar_zips != 5)
+```
+
+* The Zillow dataset consists of **`r nrow(zillow)` observations and `r ncol(zillow)` variables**. First we check if the data is unique at the zip level.
+Since the zip codes are in an integer format, we convert them to character and
+check the different zip codes in the dataset.
+
+* Again, we observe that **`r length(abnormal_zips)` zip codes are not 5 characters length**
+and hence we remove them
+
+* We observe a total of **`r length(unique(zillow$State))` States and  `r length(unique(zillow$City))` Cities** in the data. 
+We are concerned only about **New York City** and hence filter out only those
+properties, as shown by the code below
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+ 
+# Removing zip codes with abnormal character length
+zillow_1 <- zillow[-abnormal_zips,]
+
+# Filtering only New York City
+NYC <- "New York"
+zillow_2 <- zillow_1 %>% filter(City %in% NYC)
+```
+***
+
+* The time series data of **median property cost** is spread across the columns **from 1996-2017**.
+* The AirBnB data comprised of revenue data only for the month May 2017. Hence, 
+we **assume same rent thorugh the year**
+* Also, we take that the **company buys the properties on May 2017, rent for a year, and then sell the property by May 2018**. Hence, we predict the property cost on May 2018 for each property, based on the last 5 years property cost growth rate.
+* The **average annual growth rate over the last 5 years** (May 2013- May 2017) is taken as the growth rate for the property from May 2017 - May 2018. This is done by the code below:
+
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# selecting only month of may
+zillow_time <- zillow_2 %>% select(ends_with(".05"))
+#selecting only last 5 yrs
+zillow_time <- zillow_time %>% select(X2013.05:X2017.05)
+
+# Finding the growth rate for each year
+len <- ncol(zillow_time)
+
+new_columns <- as.character((1:(len-1)))
+zillow_time[,new_columns] <- NA
+#calculating growth rate and storing as new columns
+for(i in 2:len){
+  zillow_time[,i+len-1] <- zillow_time[,i]/zillow_time[,i-1]
+}
+
+# Calculating the average growth rate for the past 5 years to 
+# predict the property cost for next year (2008) 
+zillow_2$SellingPrice_2018 <- rowMeans(zillow_time[,6:9])*zillow_time$X2017.05
+
+
+# Selecting only relevant variables
+zillow_final <- zillow_2 %>%
+                  select(RegionName:SizeRank, X2017.05, SellingPrice_2018)
+
+# Renaming the property cost variable
+names(zillow_final)[names(zillow_final) == 'X2017.05'] <- 'Property_Cost_2017'
+
+# converting zipcodes to character variable. Will be useful while joining datasets
+zillow_final$RegionName <- as.character(zillow_final$RegionName)
+```
+***
+
+### Key Insights from Data Cleaning
+
+Below are the key insights from the data cleaning process
+
+* There were **missing zip codes in AirBnB** and wrong format of zip codes (xxxxx-xxxx or xxxx) in both datasets
+* A total of **22** zip codes were common between the AirBnB and zillow datasets
+* The Zillow dataset does not have any information on how large the house is. Also, more than **98% square foot data is missing in AirBnB** . Hence, it is **assumed** that both datasets have houses with the **same square foot area**
+* The AirBnB data, which has information about rental price was scraped during **May 2017**.
+Hence, we consider the same **time frame** for Property cost data from Zillow dataset.
+
+Anomalies specific to datasets:
+
+- **Zillow**: 
+    a. The number of **misssing values in median prices increase** as we go back **in time**
+    b. The data has information about multiples states and cities. We are interested
+    only in the **city of New York**
+        
+- **AirBnB**:
+    a. We have one data label from Uruguay. The zip code is from New York and
+    hence it is assumed to be data collection error with no action taken
+    b. Only **12%** of the data has information about **2BHK properties**. We filter only those properties for our analysis
+
+
+## Data Preparation {.tabset .tabset-fade .tabset-pills}
+
+Now, we have both the datasets ready to be joined. We need to join them,
+identify and remove zero variance factors, handle outliers
+and derive new metrics, which will be used for our analysis  
+
+### Joining the datasets
+
+Both the datasets are joined together based on zip codes as shown below.
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+# Joining tables by zip code
+investment_df <- zillow_final %>%
+                    left_join(airbnb_final, by = c("RegionName" = "zipcode"))
+
+# Removing missing values introduced in airbnb datasets by missing zip code information
+investment_df <-   investment_df %>% filter(!is.na(id))
+```
+
+* This dataset consits of information about **`r length(unique(investment_df$RegionName))` zip codes**
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Function to identify zero variance variables
+zero_variance <- function(dat) {
+  out <- lapply(dat, function(x) length(unique(x)))
+  want <- which(!out > 1)
+  unlist(want)
+}
+
+# Number of zero variance variables in the joined dataset
+n_zero_var <- length(zero_variance(investment_df))
+
+# Removing zero variance variables from the dataset
+investment_df <- investment_df %>%
+                    select(-zero_variance(investment_df))
+
+```
+
+* Created a **function** to identiy variables having **zero variance**, which do not give any information. 
+
+* Using the function, we observe that there are **`r n_zero_var` zero variance varibles** in the final dataset: City, State and Metro.
+We **remove** these varaibles.
+
+* The initially cleaned dataset now consists of **`r nrow(investment_df)` property information**
+spread across **`r length(unique(investment_df$RegionName))` zip codes**
+
+
+### Outliers
+
+Next, we want to identify the outliers in the data, specifically with respect to
+property cost and price per day of stay. We can use boxplot for this purpose,
+as shown below:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Function to identify COUNTY wise outliers in price or cost
+Outliers_County <- function(price_1, label) {
+  
+plot_1 <- investment_df %>% 
+  group_by(CountyName) %>% 
+  ggplot(aes(x = CountyName, y = price_1,
+             fill = CountyName)) +
+  geom_boxplot()+
+  scale_y_continuous(labels = comma) +
+  labs(title = paste0("Outlier check for ", label),
+       x = "Neighborhood", y = label)
+
+ggplotly(plot_1)
+
+}
+
+# Function to identify ZIP CODE wise outliers in price or cost
+Outliers_zip <- function(price_1, label) {
+  
+plot_1 <- investment_df %>% 
+  group_by(RegionName, CountyName) %>%
+  arrange(CountyName) %>% 
+  ggplot(aes(x = RegionName, y = price_1,
+             fill = CountyName)) +
+  geom_boxplot()+
+  scale_y_continuous(labels = comma) +
+  labs(title = paste0("Outlier check for ", label),
+       x = "Zipcode", y = label) +
+  coord_flip()
+
+ggplotly(plot_1)
+
+}
+
+```
+
+
+#### Price per day
+
+* **COUNTY wise analysis:**
+
+We find a lot of outliers in the price of stay per day. However, zip code analysis 
+of the price data will give us a better insight on the outliers.
+
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Plotting Outliers in Price per day for each County
+Outliers_County(investment_df$price, label = "Price per day")
+
+```
+
+
+* **ZIP CODE wise analysis:**
+
+zip code anlysis confirms the existence of outliers. Presence of Outliers 
+in the data will skew our analysis
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Plotting Outliers in Price per day for each zip code
+Outliers_zip(investment_df$price, label = "Price per day")
+
+
+# Removing outliers
+rel_zips <- unique(investment_df$RegionName)
+
+for (i in 1:length(rel_zips)) {
+  data <- subset(investment_df, RegionName == rel_zips[i])
+  outliers <- boxplot(data$price, plot = FALSE)$out
+  investment_df <- investment_df[!(investment_df$RegionName == rel_zips[i] &
+                                     investment_df$price %in% outliers),]
+}
+```
+
+
+
+***Action: Remove Outliers in each zip code***
+
+Our data after removing the outlier is as below:
+
+
+* **COUNTY wise Clean data **
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Clean data with outliers removed: Price per day for each County
+Outliers_County(investment_df$price, label = "Price per day")
+```
+
+* **ZIP CODE wise Clean data**
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Clean data with outliers removed: Price per day for each zip code
+Outliers_zip(investment_df$price, label = "Price per day")
+
+```
+
+#### Property Cost
+
+* We do not find that many outliers in our data with respect to the cost. Also,
+each zip code has only one property cost value. Hence, we do not remove any 
+values.
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Plotting Outliers in Property Cost for each County
+Outliers_County(investment_df$Property_Cost_2017, label = "Property Cost in 2017")
+
+```
+
+The **clean data** consists of information about **`r nrow(investment_df)` properties**
+and **`r length(unique(investment_df$RegionName))` zip codes**
+
+
+
+### Metrics for Analysis
+
+#### Existing data
+
+The final data has the following variables used for our analysis:
+
+* **RegionName:** Zip code of where the property is located
+* **SizeRank:** Population of the area; the lower the number the greater the
+population  
+* **Neighborhood:** Name of the area where the property is located
+
+
+Next, we create calculated fields and define metrics for our analysis. They are
+as follows:
+
+#### Defining Occupancy
+
+For our analysis, instead of assuming a 75% constant rate, we wanted to come up with a better measure of occupancy. We are proposing a new metric where we consider that, **Occupancy** depends mainly on the review rating, and also on the amenities 
+provided. 
+
+Hence, we define the occupancy % for property based on **overall rating(70% weightage)** and **number of amenities(30% weightage)** as follows:
+
+a. First we create a calculated variable called amenities score, based on the
+number of amenities provided in each property. Similarly, we scale the overall 
+review rating for each property listed.
+
+b. Then we perform a weighted sum of amenities score and review score to calculate the Occupancy for each property. This is given by the below formula:
+
+**Important Note:** Properties with missing Review Score are assumed to have an Occupancy of 75%.
+
+$$Occupancy = 0.7*ReviewScore + 0.3*AmenitiesScore$$
+
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+scale_function <- function(x, ...){
+                      (x - min(x, na.rm = T))/(max(x, na.rm = T) - min(x, na.rm = T))
+                    }
+amenities_score <- scale_function(investment_df$no_amenities)
+review_score <- scale_function(investment_df$review_scores_rating)
+
+# Weighted conversion to a scale of 0-30
+investment_df$amenities_weighted <- amenities_score*30
+
+# Weighted conversion to a scale of 0-70
+investment_df$review_weighted <- review_score*70
+
+investment__final_df <- investment_df %>% 
+                          mutate(Occupancy = (review_weighted + amenities_weighted)/100)                          
+
+# we take occupancy as 75% for missing values
+investment__final_df$Occupancy[is.na(investment__final_df$Occupancy)] <- .75
+
+
+```
+
+
+#### Other Metrics
+
+* **Property_Cost:** The median cost of properties in each zip code
+* **Revenue_Per_Year:** The median price of the properties for each zip code is taken,
+(Mean is prone to outliers) and zillow cost data is median.This data is per day.
+Hence we multiply this by 365 to get the revenue per year through rental
+* **N_Properties:** The total number of properties listed for each zip code
+* **Break_even:** Break even time is the amount of time required for the revenue to equal its initial cost of investment (assuming a constant rent)
+
+$$ Break Even = \frac{Property Cost}{Revenue per year}$$
+
+* **Return Rate:** shows how much percentage of cost is covered in a year through rents, given by the below formula:
+
+$$ Return Rate = 100*(\frac{Revenue Per Year}{Property Cost})$$
+
+* **Appreciation Rate:** Appreciation is an increase in the value of an asset over time, given by the below formula:
+
+$$ Appreciation Rate = 100*(\frac{SellingPrice - PropertyCost}{Property Cost})$$
+
+* **ROI:** THe ROI is calculated based on the total profit obtained through rent and selling the property in a year, given by the below formula:
+
+$$ ROI = 100*\frac{(YearlyRent + SellingPrice - PropertyCost)}{Property Cost} $$
+
+
+### Final Data
+
+The Metrics for each zip code is calculated and our final zip code data is
+shown below:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+# Final data with metrics
+investment__final_2_df <- investment__final_df %>%
+                          mutate(Revenue_per_year = 365*price*Occupancy)
+
+zip_data <- investment__final_2_df %>% 
+              group_by(RegionName, SizeRank, Neighborhood) %>% 
+              summarise(Number_of_Properties = n(),
+                        zip_property_cost = round(median(Property_Cost_2017),2),
+                        zip_selling_price = round(median(SellingPrice_2018),2),
+                        zip_revenue_per_year = round(median(Revenue_per_year),2),
+                        ReturnRate = round(100*zip_revenue_per_year/zip_property_cost,2),
+                        Appreciation = round(100*(zip_selling_price - zip_property_cost)/zip_property_cost,2),
+                        Break_even = round(zip_property_cost/zip_revenue_per_year, 0),
+                        ROI = round(100*((zip_revenue_per_year+zip_selling_price - zip_property_cost)/zip_property_cost),2))
+
+DT::datatable(zip_data %>% arrange(Break_even))
+
+
+```
+
+## Analysis {.tabset .tabset-fade .tabset-pills}
+
+Our analysis is split into  the following:
+
+* How much demand do we have in each zip code? Is the demand for 2 bedroom 
+apartment the same across all zip codes?
+
+* **Cost vs Revenue Analysis:** Do we get more revenue by investing in a costlier
+zip code or neighborhood?
+
+* **Break even Analysis:** How much time will it take for the total revenue from rentals to break even with the property cost?
+
+* **Return on Investment(ROI):** Considering Short term investment, that is, the real estate company buys a property in May 2017, rents for a year and then sells the property after a year, what are the most profitable zip codes to invest in?
+
+### Properties per Zip code
+
+First, we check if there is equal demand(data) for properties in each zip code
+under airbnb. We would like to see if there are equal number of listings by
+AirBnB for each zip code. This is done as follows:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Number of Properties per zip code
+zip_data %>%
+  ggplot(aes(x = reorder(RegionName,-Number_of_Properties),
+             y = Number_of_Properties, fill = Neighborhood)) +
+  geom_bar(stat = "identity", alpha = 0.7) +
+  geom_text(aes(label = Number_of_Properties,
+                y = Number_of_Properties + 4)) +
+  coord_flip() +
+  scale_fill_brewer(type = "qual", palette = "Set2") +
+  labs(x = "Zipcode", y = "Number of Properties listed",
+       fill = "Neighborhood", title = "Properties per Zipcode") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+We observe that while zip code **11215** has about **130 properties**, zip codes **10308 and 10312 have only one property**. This might indicate that there might be properties which are currently not owned by AirBnB.
+
+Next, we check if the number of properties depends upon the population within the
+zip code. 
+
+We expect a densely population zip code to have higher number of properties compared
+to less populated zip codes.
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Number of Properties per zip code
+DT::datatable(investment__final_2_df %>% 
+                group_by(RegionName, SizeRank) %>%
+                summarise(Number_of_Properties = n()) %>% 
+                arrange(SizeRank),
+              colnames = c("ZipCode", "Population Rank", "Number_of_Properties"))
+```
+
+From the above table, it is clearly seen that there is no relation to the
+population density and number of properties listed in AirBnB.
+
+Let us analyse the same for each neighborhood as shown below:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+# Showing the number of properties for each County/neighborhood
+DT::datatable(investment__final_2_df %>% 
+                group_by(CountyName, Neighborhood) %>%
+                summarise(Number_of_zipcodes = n_distinct(RegionName),
+                          Number_of_Properties = n()) %>% 
+                arrange(desc(Number_of_Properties)))
+```
+
+We observe that there are a lot of properties listed in Manhattan (800), followed by
+Brooklyn (351. At the same time, there are very less properties listed in Staten Island(14) 
+and Queens(9).
+
+* **Does this have anything to do with the Profitability?**
+
+* **Are zip codes in Manhattan and Brooklyn likely to be more profitable, because of which AirBnB has listed more properties?**
+
+* **Or there is a possibility of Staten Island and Queens being profitable locations, just that AirBnB does not own more properties there**
+
+
+### Cost and Revenue Analysis
+
+Here we analyse if the cost and revenue are in line for each zip code, in turn
+answering our main question:
+
+**Does a costlier property guarantee higher return?**
+
+
+#### **Zip code Cost Analysis:**
+
+We looked at the median property costs of every zip code and tried observing any
+patterns in that.
+
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+#Property cost
+zip_data %>%
+    ggplot(aes(x = reorder(RegionName,-zip_property_cost),
+               y = zip_property_cost, fill = Neighborhood)) +
+    geom_bar( stat = "identity", alpha = 0.7) +
+    coord_flip() +
+    scale_y_continuous(labels = comma) +
+    scale_fill_brewer( palette = "Set2") +
+    labs(x = "Zipcode", y = "Median Property Cost($)",
+         fill = "Neighborhood", title = "Property Cost Analysis") +
+    theme_classic() +
+    theme(plot.title = element_text(hjust = 0.45))
+
+```
+
+
+* It is clearly seen that the **properties in Manhattan are very costly**, closely 
+followed by Brooklyn. 
+* Properties in **Statan island and Queens are a lot cheaper** in this comparative
+analysis. 
+* One could get a property for less than half a million in Staten Island(zip codes 103##)
+and Queens(11434), but would have to spend more than 1.5 million to get an 
+apartment in Manhattan(zip codes 100##). 
+* The properties in zip code **10013 (Manhattan)** are the **costliest**, going for more
+than **3 million**
+
+
+#### **Zip code Revenue Analysis**
+
+Next, we look at the median revenue per year for each zip code. Here, we expect a comparatively higher revenue in Manhattan and lower revenue in zip codes in Staten Island. 
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+
+#Revenue
+zip_data %>%
+    ggplot(aes(x = reorder(RegionName,-zip_revenue_per_year),
+               y = zip_revenue_per_year, fill = Neighborhood)) +
+    geom_bar( stat = "identity", alpha = 0.7) +
+    coord_flip() +
+    scale_y_continuous(labels = comma) +
+    scale_fill_brewer( palette = "Set2") +
+    labs(x = "Zipcode", y = "Median Revenue per year($)",
+         fill = "Neighborhood", title = "Zipcode Revenue Analysis") +
+    theme_classic() +
+    theme(plot.title = element_text(hjust = 0.45))
+
+```
+
+* As we expected, the **revenue is higher in zip codes in Manhattan and Brooklyn**,
+while compared to those zip codes in Queens or Staten Island.
+* But, one thing which stands out is the **revenue in zip code 10312**. We observe 
+that the revenue in that particular zip code **is higher than all zip codes listed in Brooklyn**, even higher than 2 zip codes (10021, 10128) from Manhattan.
+* Also, we see that, while properties in Staten Island cost about 
+one-third the other neighborhoods, their revenues slightly higher than that.  
+* The properties in zip code **10013** which cost a fortune, also give us the
+**second best revenue per year**.
+
+* **But does the revenue make up for the cost spent? If so, how soon does it break even?**
+
+
+### Breakeven analysis
+
+Next, we analyse, for each zip code, how much time it will take for the rental revenue to break even with the investment cost
+
+Break even time is the amount of time required for the revenue to equal its initial cost of investment (assuming a constant rent)
+
+$$ Break Even = \frac{Property Cost}{Revenue per year}$$
+
+
+The below plot shows the time taken by properties in each zip code to break even
+with the cost:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+#Break even
+zip_data %>%
+    ggplot(aes(x = reorder(RegionName,-Break_even),
+               y = Break_even, fill = Neighborhood)) +
+    geom_bar(stat = "identity", alpha = 0.7) +
+    geom_text(aes(label = Break_even,
+                  y = Break_even + 1.2)) +
+    coord_flip() +
+    scale_fill_brewer( palette = "Set2") +
+    labs(x = "Zipcode", y = "Break even period (in years)",
+         fill = "Neighborhood", title = "Zipcode break even period") +
+    theme_classic() +
+    theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+* The properties in zip code **10312** has the **least break even** time of **6 years**. For long term, this zip code clearly the best place to invest in.
+* The properties in zip code **10013** have the **highest break even** time of **40 years.** 
+That is a very long time frame. Hence, investing in this locality is not recommended.
+* Again, **for long term investment**, comparing neighborhoods, **Staten Island and Queens** are the **best** places to invest in NYC, while it is not recommended to invest in Manhattan or Brooklyn.
+* But since we have only very **less data for Staten Island and Queens** neighborhood, 
+the analysis cannot be taken as it is. More data in these neighborhoods will give 
+better and more clearer insights.
+
+### Return on Investment
+
+Finally, the real estate company wants to invest on short term rentals. So the best way to identify the most profitable zip codes is through Return on Investment.
+
+Here, we are considering the case where customer buys a property in May 2017, rents for a year and then sells the property after a year.
+
+**Return Rate through rent**
+
+For this, first we identify which zip codes give maximum Return rate through rent.
+
+Return Rate shows how much percentage of cost is covered in a year through rents, given by the below formula:
+
+$$ Return Rate = 100*(\frac{Revenue Per Year}{Property Cost})$$
+
+For a period of one year, Return rate for each zip code is given below:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+#Return rate
+zip_data %>%
+    ggplot(aes(x = reorder(RegionName,ReturnRate),
+             y = ReturnRate, fill = Neighborhood)) +
+    geom_bar(stat = "identity", alpha = 0.7) +
+    geom_text(aes(label = round(ReturnRate,1),
+                y = ReturnRate + .7)) +
+    coord_flip() +
+    scale_fill_brewer( palette = "Set2") +
+    labs(x = "Zipcode", y = "% Return in a year",
+       fill = "Neighborhood", title = "Return Rate per year") +
+    theme_classic() +
+    theme(plot.title = element_text(hjust = 0.5))
+```
+
+From the above, we observe clear differences in the % Return per year between zip codes and neighborhoods in broader sense.
+
+* The zip code **10312** has the highest return of **16.7%** of the total investment in a year
+* The zip code **10013**, which has very high property price, has the least Return in a year, while zip codes 10312, 10205, 10306,10304, have comparatively cheaper properties but at the same time, very high return Rate
+* Also, comparing neighborhoods, **Staten Island and Queens have higher Return rate from rents** when compared to Brooklyn and Manhattan
+
+**Property Appreciation Rate**
+
+Next, we should also consider the increase in the property price in a year.
+
+Appreciation is an increase in the value of an asset over time, given by the below formula:
+
+$$ Appreciation Rate = 100*(\frac{SellingPrice - PropertyCost}{Property Cost})$$
+
+For a period of one year, Appreciation rate for each zip code is given below:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+#Appreciation rate
+zip_data %>%
+    ggplot(aes(x = reorder(RegionName,Appreciation),
+             y = Appreciation, fill = Neighborhood)) +
+    geom_bar(stat = "identity", alpha = 0.7) +
+    geom_text(aes(label = round(Appreciation,1),
+                y = Appreciation + .7)) +
+    coord_flip() +
+    scale_fill_brewer( palette = "Set2") +
+    labs(x = "Zipcode", y = "% Appreciation in a year",
+       fill = "Neighborhood", title = "Appreciation Rate per year") +
+    theme_classic() +
+    theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+* The zip code **11217** has the highest %Appreciation of **14.2%** of the total investment in a year
+* Again, the zip code **10013**, which has very high property price, has the least Appreciation as well, in a year.
+* Also, comparing neighborhoods, **Brooklyn** stands out with the **best appreciation rate** for a year.
+
+**Return on Investment**
+
+Aggregating the revenues through Rents and Property Appreciation rate, we get the total
+Return on Investment (ROI) for properties in each zip code. 
+
+The ROI is calculated based on the total profit obtained through rent and selling the property in a year, given by the below formula:
+
+$$ ROI = 100*\frac{(YearlyRent + SellingPrice - PropertyCost)}{Property Cost} $$
+
+
+This is shown below:
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment=''}
+#ROI
+zip_data %>%
+    ggplot(aes(x = reorder(RegionName,ROI),
+               y = ROI, fill = Neighborhood)) +
+    geom_bar(stat = "identity", alpha = 0.7) +
+    geom_text(aes(label = round(ROI,1),
+                  y = ROI + 1.2)) +
+    coord_flip() +
+    scale_fill_brewer( palette = "Set2") +
+    labs(x = "Zipcode", y = "ROI",
+         fill = "Neighborhood", title = "Zipcode ROI") +
+    theme_classic() +
+    theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+* The zip code **10312** has the highest return of **21.7%** of the total investment in a year
+* The zip code **10013**, which has very **high property price**, has the **lowest ROI in a year**.
+* Also, comparing neighborhoods, **Staten Island and Brooklyn** have higher ROI when compared Manhattan 
+* We observe that, even though **Brooklyn** does not seem a good place for long term investment, it gives a **good ROI** for a year. This is because of the higher property rate growth. 
+
+## Custom Property Finder(Shiny)
+
+As the final part of our analysis, an interactive tool is created, in case the 
+real estate company wants to **customize their requirements and identify the best properties to invest**. 
+
+The customizable inputs are :
+
+**Minimum Number of Amenities:**This metric can be related to the quality of the
+property in which they are planning to invest. More the number of amenities, better
+the quality. We can select the minimum number of amenities required in the property listed.
+
+**Property Investment Amount:** Budget range the client wants to spend on a single
+property
+
+**Maximum BreakEven:** The maximum time the client can wait for the cash flow to
+equal the initial investment.
+
+The table lists the most profitable properties which the real estate can invest,
+based on their custom requirements. The best property (based on %Return through rents and shortest Break even time) is listed at the top of the table(Property identified by its AirBnB ID), followed by the next best and so on.
+
+(Shiny Code Hidden)
+
+
+```{r message = FALSE, warning= FALSE, error = FALSE, echo = FALSE, comment=''}
+
+
+ui <- fluidPage(
+  # Adding title
+  titlePanel("Best Property Finder"),
+  
+  # Sidebar 
+  
+  fluidRow(
+    # Review
+    
+    
+    #Amenities
+    column(4,
+           selectInput(inputId = "amenities",
+                       label = "Minimum # of Amenities",
+                       c(min(investment__final_2_df$no_amenities):max(investment__final_2_df$no_amenities)), multiple = FALSE, selected = 20)
+    ),
+    
+    
+    # Cost range
+    
+    column(4,
+           sliderInput(inputId = "range",
+                       label = "Property Investment Amount",
+                       min = min(investment__final_2_df$Property_Cost_2017),
+                       max = max(investment__final_2_df$Property_Cost_2017),
+                       value = c(min(investment__final_2_df$Property_Cost_2017),
+                                 max(investment__final_2_df$Property_Cost_2017)))
+    ),
+    
+    column(4,
+           selectInput(inputId = "yrs", label = "Maximum BreakEven period",
+                       c(1:40), multiple = FALSE, selected = 30)
+    )
+    
+  ),
+  
+  # Datatable output
+  fluidRow(
+    
+    DT::dataTableOutput("table")
+  )
+  
+  
+)
+
+server <- function(input, output) {
+  
+  datasetInput <- reactive({
+    investment__final_2_df %>%
+      filter(Property_Cost_2017 >= as.numeric(input$range[1]),
+             Property_Cost_2017 <= as.numeric(input$range[2]),
+             no_amenities >= as.numeric(input$amenities)) %>%
+      left_join(zip_data, by = "RegionName") %>% 
+      mutate(Return_Rate = round(100*Revenue_per_year/Property_Cost_2017, 2),
+             Break_even = round(Property_Cost_2017/Revenue_per_year, 0)) %>% 
+      filter(Break_even <= as.numeric(input$yrs)) %>% 
+      select(everything(), Neighborhood = Neighborhood.x, AirBnB_ID = id,
+             Zipcode = RegionName, Number_of_Amenities = no_amenities,
+             Break_Even_time = Break_even) %>%
+      select(AirBnB_ID, Zipcode, Neighborhood, Number_of_Amenities,
+             Return_Rate, Break_Even_time) %>% 
+      arrange(desc(Return_Rate))
+    
+  })
+  
+  output$table <- DT::renderDataTable({
+    # Finding the median for the map
+    datasetInput()
+  }, caption = "Best Properties to Invest")
+}
+
+
+
+shinyApp(ui, server, options = list(height = 800))
+
+```
+
+
+## Conclusion and Future Work
+
+###Conclusion
+
+The following are the major insights obtained from our analysis:
+
+* For long term, Investing in zip codes where property costs are cheaper will lead to better
+return from rentals than investing on zip codes with costlier property costs.
+* Given the above, properties in Staten Island and Queens are cheaper and have the shortest Break even time. 
+* For Short term rentals, Staten Island, Brooklyn and Queens are good places to invest, 
+with Staten Island have higher return from rentals, whereas, Brooklyn has higher appreciation rate.
+* Overall, the best zip code to invest is 10312, followed by 11217 and 11231.
+
+* Based on the above, the **most profitable zip codes** are :
+
+```{r message = FALSE, warning= FALSE, error = FALSE, comment='', echo=FALSE}
+zip_data %>%
+  top_n(n=5, wt = ROI) %>%
+  arrange(desc(ROI)) %>%
+  ungroup() %>% 
+  select(RegionName, Neighborhood, ROI, zip_property_cost) %>%
+  mutate(zip_property_cost = paste0('$',round(zip_property_cost/1000000,2)),
+         ROI = paste0(round(ROI,2),'%')) %>%
+  dplyr::select(everything(), Cost_of_property_Million = zip_property_cost,
+         Zipcode = RegionName) %>%
+  head(5) %>% 
+  kable(format="html", align = "c") %>%
+  kable_styling(bootstrap_options = "striped",position = "center",
+                full_width = F)  
+```
+
+### Future Work
+
+The following are the future tasks which will improve our analysis:
+
+* We had information about very few properties in the neighborhoods of Staten Island and Queens. More data on these locations will help make our analysis more robust.
+perform a more robust analysis on them.
+* Time Series data of price: If we have a time series data of the AirBnB listings,
+then we could use that with zillow data to predict future rent and break even.
+* We can also perform a similar analysis on other cities in which the real estate
+company might invest in the future.
