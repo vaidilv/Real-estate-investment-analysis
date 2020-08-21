@@ -5,7 +5,7 @@ Built a Data product and an interactive shiny dashboard to identify properties a
 Steps to run the markdown report: 
 1. Download the .Rmd file. 
 2. Copy and Paste it in the same location as the zipfile "Zip_Zhvi_2bedroom.csv.zip"
-  # (Make it as the working directory)
+  (Make it as the working directory)
 3. Open the Rmd file in RStudio and run the document ("Run Document" with a play button)
 4. The AirBnB dataset will be directly downloaded from the link provided, 
    hence we need an internet connection
